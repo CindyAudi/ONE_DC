@@ -35,7 +35,7 @@ BiocManager::install("Seurat")
 ## Data
 
 The processed `Seurat` object (`Seurat_Join_Filt_fresh_unstim.rds`) required to run this script is not hosted in this repository due to size. 
-Processed object is available at **10.5281/zenodo.21093824**.
+Processed object is available at **10.5281/zenodo.21096212**.
 To run the script, place the `.rds` file at `data/Seurat_Join_Filt_fresh_unstim.rds` relative to the script, or edit the path in the `load-data` chunk.
 
 ## Usage
