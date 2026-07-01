@@ -1,0 +1,294 @@
+---
+title: "ONE_DC_Script"
+author: "Cindy Audiger"
+date: "2026-07-01"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup}
+library(Seurat)
+library(ggplot2)
+library(dplyr)
+library(ggrepel)
+library(patchwork)
+library(pheatmap)
+library(RColorBrewer)
+
+set.seed(42)
+```
+
+```{r parameters}
+# ── Global parameters used throughout this script ──────────────
+CLUSTER_COL    <- "NEW_CLUSTERS"        # metadata column holding cluster IDs
+CLUSTERS_BLOOD <- c("g4")               # blood DC1
+CLUSTERS_CULT  <- c("g3", "g1", "g9")   # culture-derived DC1
+CLUSTER_NEG    <- c("g11")              # blood DC2
+N_HVG          <- 2000                  # HVGs to use for correlation
+OUTDIR         <- "."                   # output directory
+```
+
+```{r load-data}
+# Load the Seurat object.
+# Replace this path with wherever the .rds lives in your data folder.
+seurat_obj <- readRDS(file.path("data", "Seurat_Join_Filt_fresh_unstim.rds"))
+```
+
+```{r clustering}
+seurat_obj <- FindNeighbors(seurat_obj, dims = 1:20)
+seurat_obj <- FindClusters(seurat_obj, resolution = 0.5, cluster.name = CLUSTER_COL)
+seurat_obj <- RunUMAP(seurat_obj, dims = 1:20, reduction.name = "umap_NEW_CLUSTERS")
+```
+
+# Panel A
+```{r panel-a-umap}
+DimPlot(seurat_obj, reduction = "umap_NEW_CLUSTERS") +
+  theme(aspect.ratio = 1)
+```
+
+```{r panel-a-umap-save}
+p <- DimPlot(
+  seurat_obj,
+  reduction = "umap_NEW_CLUSTERS"
+)
+
+ggsave(
+  file.path(OUTDIR, "UMAP_NEW_CLUSTERS.pdf"),
+  p,
+  width = 6,
+  height = 6
+)
+```
+
+# Supplementary figure - Panel A
+```{r suppfig-a-heatmap}
+DefaultAssay(seurat_obj) <- "RNA"
+Idents(seurat_obj) <- CLUSTER_COL
+
+Fresh_unstim_FindAllMarkers <- FindAllMarkers(seurat_obj, only.pos = TRUE)
+
+saveRDS(Fresh_unstim_FindAllMarkers, file = file.path(OUTDIR, "Fresh_unstim_FindAllMarkers.rds"))
+
+Fresh_unstim_FindAllMarkers_TOP20 <- Fresh_unstim_FindAllMarkers %>%
+  group_by(cluster) %>%
+  dplyr::filter(avg_log2FC > 1) %>%
+  slice_head(n = 20) %>%
+  ungroup()
+
+DoHeatmap(
+  object   = seurat_obj,
+  assay    = "RNA",
+  features = Fresh_unstim_FindAllMarkers_TOP20$gene,
+  group.by = CLUSTER_COL,
+  size     = 2
+) +
+  theme(
+    axis.text.x  = element_text(size = 15),
+    axis.text.y  = element_text(size = 4),
+    aspect.ratio = 50 / 30
+  )
+```
+
+# Panel B
+```{r panel-b-featureplots}
+# ── 1. Marker genes to plot ─────────────────────────────────────
+features <- c("CLEC9A", "IRF8", "CADM1", "SIRPA", "IRF4", "ITGAX", "LAMP3",
+              "CCR7", "MKI67", "MPO", "HBB", "CLC", "CD14", "XCR1", "CD83")
+
+# ── 2. Generate individual plots ────────────────────────────────
+plot_list <- lapply(features, function(gene) {
+  FeaturePlot(
+    seurat_obj,
+    features  = gene,
+    reduction = "umap_NEW_CLUSTERS",
+    pt.size   = 0.8,
+    order     = TRUE      # plot expressing cells on top
+  ) +
+    scale_color_viridis_c(
+      option = "viridis",
+      name   = "Expression",
+      guide  = guide_colorbar(barwidth = 0.8, barheight = 6)
+    ) +
+    labs(title = gene) +
+    theme_void() +
+    theme(
+      plot.title      = element_text(face = "bold.italic", size = 10, hjust = 0.5,
+                                      margin = margin(b = 2)),
+      legend.text     = element_text(size = 12),
+      legend.title    = element_text(size = 14),
+      legend.position = "right",
+      plot.margin     = margin(3, 3, 3, 3),
+      axis.line       = element_line(colour = "black", linewidth = 0.4),
+      aspect.ratio    = 1
+    )
+})
+
+# ── 3. Assemble grid layout with patchwork ──────────────────────
+n_genes <- length(features)
+n_cols  <- 3
+n_rows  <- ceiling(n_genes / n_cols)
+
+combined <- wrap_plots(plot_list, ncol = n_cols) +
+  plot_layout(ncol = n_cols, widths = rep(1, n_cols)) +
+  plot_annotation(
+    title = "Marker gene expression",
+    theme = theme(
+      plot.title = element_text(face = "bold", size = 13, hjust = 0.5,
+                                 margin = margin(b = 5))
+    )
+  ) &
+  theme(plot.margin = margin(0.2, 0.2, 0.2, 0.2))
+
+# ── 4. Save (height/width scale with grid size) ─────────────────
+panel_size  <- 2.8
+plot_width  <- n_cols * panel_size
+plot_height <- n_rows * panel_size
+
+ggsave(
+  file.path(OUTDIR, "FeaturePlot_markers_2col2.pdf"),
+  combined,
+  width  = plot_width,
+  height = plot_height,
+  device = "pdf"
+)
+
+cat("Saved: FeaturePlot_markers_2col2.pdf\n")
+cat("Layout:", n_cols, "columns x", n_rows, "rows\n")
+```
+
+# Supplementary figure - Panel C
+```{r suppfig-c-correlation-all}
+# ── 1. Confirm cluster column exists ────────────────────────────
+stopifnot(CLUSTER_COL %in% colnames(seurat_obj@meta.data))
+Idents(seurat_obj) <- CLUSTER_COL
+
+all_clusters <- sort(unique(as.character(seurat_obj@meta.data[[CLUSTER_COL]])))
+cat("Clusters found:", paste(all_clusters, collapse = ", "), "\n")
+
+# ── 2. Select HVGs from the normalised data ─────────────────────
+# VariableFeatures() works for both Seurat v4 (Assay) and v5 (Assay5)
+hvg <- VariableFeatures(seurat_obj)
+if (length(hvg) == 0) {
+  message("No HVGs found — running FindVariableFeatures() now.")
+  seurat_obj <- FindVariableFeatures(seurat_obj, nfeatures = N_HVG)
+  hvg <- VariableFeatures(seurat_obj)
+}
+hvg <- hvg[seq_len(min(N_HVG, length(hvg)))]
+cat("Using", length(hvg), "HVGs for correlation.\n")
+
+# ── 3. Compute pseudobulk average expression per cluster ────────
+avg_expr <- AverageExpression(
+  seurat_obj,
+  features = hvg,
+  assays   = "RNA",
+  group.by = CLUSTER_COL,
+  layer    = "data"     # uses normalised (log1p) counts
+)$RNA
+
+avg_mat <- as.matrix(avg_expr)
+colnames(avg_mat) <- as.character(colnames(avg_mat))
+cat("Average expression matrix:", nrow(avg_mat), "genes x", ncol(avg_mat), "clusters\n")
+
+# ── 4. Compute Pearson correlation across clusters ───────────────
+cor_mat <- cor(avg_mat, method = "pearson")
+
+# ── 5. Annotate clusters for the heatmap ─────────────────────────
+ann_df <- data.frame(
+  Population = ifelse(
+    colnames(cor_mat) %in% CLUSTERS_BLOOD, "Blood DC1",
+    ifelse(colnames(cor_mat) %in% CLUSTERS_CULT, "Culture DC1",
+      ifelse(colnames(cor_mat) %in% CLUSTER_NEG, "Blood DC2", "Other"))
+  ),
+  row.names = colnames(cor_mat)
+)
+
+ann_colours <- list(
+  Population = c(
+    "Blood DC1"   = "#CC79A7",
+    "Culture DC1" = "#9990FF",
+    "Blood DC2"   = "#FF9666",
+    "Other"       = "#888780"
+  )
+)
+
+# ── 6. Plot full correlation heatmap (all clusters) ───────────────
+# Reorder so DC1 clusters are grouped together for easier reading
+dc1_clusters   <- c(CLUSTERS_BLOOD, CLUSTERS_CULT, CLUSTER_NEG)
+other_clusters <- setdiff(colnames(cor_mat), dc1_clusters)
+col_order      <- c(dc1_clusters, other_clusters)
+cor_ordered    <- cor_mat[col_order, col_order]
+
+pheatmap(
+  cor_ordered,
+  color             = colorRampPalette(c("#F5EBF0", "#CC79A7", "#663366"))(100),
+  breaks            = seq(0.7, 1, length.out = 101),
+  annotation_col    = ann_df,
+  annotation_colors = ann_colours,
+  annotation_row    = ann_df,
+  cluster_rows      = TRUE,
+  cluster_cols      = TRUE,
+  show_rownames     = TRUE,
+  show_colnames     = TRUE,
+  fontsize          = 10,
+  fontsize_row      = 9,
+  fontsize_col      = 9,
+  border_color      = NA,
+  main              = "Inter-cluster transcriptional correlation (Pearson, HVGs)",
+  filename          = file.path(OUTDIR, "DC1_correlation_heatmap_all_clusters.pdf"),
+  width             = 8, height = 7
+)
+
+cat("Saved: DC1_correlation_heatmap_all_clusters.pdf\n")
+```
+
+# Panel C
+```{r panel-c-correlation-focused}
+# Focused heatmap: DC1 clusters + Blood DC2
+# (dc1_clusters already includes CLUSTER_NEG from the previous chunk)
+focused_clusters <- unique(c(dc1_clusters, CLUSTER_NEG))
+
+dc1_cor <- cor_mat[focused_clusters, focused_clusters]
+
+ann_dc1 <- data.frame(
+  Population = ifelse(
+    focused_clusters %in% CLUSTERS_BLOOD, "Blood DC1",
+    ifelse(focused_clusters %in% CLUSTERS_CULT, "Culture DC1", "Blood DC2")
+  ),
+  row.names = focused_clusters
+)
+
+ann_colours_focused <- list(
+  Population = c(
+    "Blood DC1"   = "#CC79A7",
+    "Culture DC1" = "#9990FF",
+    "Blood DC2"   = "#FF9666"
+  )
+)
+
+pheatmap(
+  dc1_cor,
+  color             = colorRampPalette(c("#F5EBF0", "#CC79A7", "#663366"))(100),
+  breaks            = seq(0.7, 1, length.out = 101),
+  annotation_col    = ann_dc1,
+  annotation_row    = ann_dc1,
+  annotation_colors = ann_colours_focused,
+  cluster_rows      = FALSE,
+  cluster_cols      = FALSE,
+  display_numbers   = TRUE,
+  number_format     = "%.3f",
+  number_color      = "black",
+  fontsize          = 11,
+  border_color      = NA,
+  main              = "Blood DC1, Blood DC2 & Culture DC1 - pairwise correlation",
+  filename          = file.path(OUTDIR, "DC1_correlation_heatmap_DC1_BloodDC2.pdf"),
+  width             = 6, height = 5.5
+)
+
+cat("Saved: DC1_correlation_heatmap_DC1_BloodDC2.pdf\n")
+```
+
+# Session info
+```{r session-info}
+sessionInfo()
+```
