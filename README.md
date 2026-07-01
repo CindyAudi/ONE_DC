@@ -40,6 +40,6 @@ To run the script, place the `.rds` file at `data/Seurat_Join_Filt_fresh_unstim.
 
 ## Usage
 Open `ONE_DC_Script.Rmd` in RStudio and knit, or run interactively chunk-by-chunk. Output figures (PDF) are written to the working directory by default (configurable via the `OUTDIR` parameter near the top of the script).
-
+The expected run of the data should be <30min.
 ## Contact
 For questions about this code, contact audiger.c@wehi.edu.au
